@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>下午茶點餐系統</title>
+  <style>
+    body {
+      font-family: "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #f9f9f9;
+    }
+    img.menu {
+      width: 100%;
+      max-width: 600px;
+      margin-bottom: 20px;
+      border: 1px solid #ccc;
+    }
+    h2 {
+      margin-top: 30px;
+    }
+    .person-block {
+      background: #fff;
+      padding: 10px;
+      margin-bottom: 15px;
+      border-radius: 5px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .inputs {
+      margin-left: 10px;
+    }
+    .input-row {
+      margin: 4px 0;
+    }
+    .summary {
+      background: #eef;
+      padding: 15px;
+      border-radius: 8px;
+      margin-top: 30px;
+    }
+    @media screen and (max-width: 600px) {
+      body {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>下午茶點餐系統</h1>
+  <img src="IMG_3037.jpeg" class="menu" alt="菜單圖片" />
+
+  <div id="order-section">
+    <div class="person-block" data-name="Arvin" data-order-id="">
+      <strong>Arvin</strong><br>
+      食物：
+      <div class="inputs food-inputs">
+        <div class="input-row">
+          <input type="text" class="food" />
+          <button onclick="addInput(this, 'food')">➕</button>
+        </div>
+      </div>
+      飲料：
+      <div class="inputs drink-inputs">
+        <div class="input-row">
+          <input type="text" class="drink" />
+          <button onclick="addInput(this, 'drink')">➕</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="person-block" data-name="Lynn" data-order-id="">
+      <strong>Lynn</strong><br>
+      食物：
+      <div class="inputs food-inputs">
+        <div class="input-row">
+          <input type="text" class="food" />
+          <button onclick="addInput(this, 'food')">➕</button>
+        </div>
+      </div>
+      飲料：
+      <div class="inputs drink-inputs">
+        <div class="input-row">
+          <input type="text" class="drink" />
+          <button onclick="addInput(this, 'drink')">➕</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="summary">
+      <h2>統計結果</h2>
+      <div id="summary-foods"><strong>🍱 食物：</strong></div>
+      <div id="summary-drinks"><strong>🧋 飲料：</strong></div>
+      <div id="detailed-orders"></div> </div>
+  </div>
+
+  <script>
+    // <<<<<<<<<<<< ！！請替換成你的 Google Apps Script 網路應用程式 URL！！ >>>>>>>>>>>>
+    const APP_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx5qVQ9tn6ZyeUtVXKhPDmmcS1oTI4aSAAHg1xGWDT23tRlQMaioC4tWd1piVTwh1eK/exec'; 
+    // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+    // 發送資料到 Google Apps Script (新增或更新)
+    async function sendOrderToServer(name, food, drink, id = null) {
+      try {
+        const response = await fetch(APP_SCRIPT_URL, {
+          method: 'POST',
+          mode: 'cors', // 跨域請求
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ name, food, drink, id }),
+        });
+        const data = await response.json();
+        console.log('Server Response:', data);
+
+        if (data.status === 'success' && data.newId) {
+          // 如果是新增成功，將返回的 newId 儲存到對應的 person-block
+          const personBlock = document.querySelector(`.person-block[data-name="${name}"]`);
+          if (personBlock) {
+            personBlock.dataset.orderId = data.newId;
+          }
+        }
+      } catch (error) {
+        console.error('Error sending order:', error);
+      }
+    }
+
+    // 從 Google Apps Script 讀取資料
+    async function fetchOrdersFromServer() {
+      try {
+        const response = await fetch(APP_SCRIPT_URL, {
+          method: 'GET',
+          mode: 'cors',
+        });
+        const data = await response.json();
+        if (data.status === 'success' && Array.isArray(data.data)) {
+          return data.data; // 返回從 Sheets 讀取到的所有紀錄
+        }
+        return [];
+      } catch (error) {
+        console.error('Error fetching orders:', error);
+        return [];
+      }
+    }
+
+    // 新增輸入框
+    function addInput(button, type) {
+      const container = button.parentElement.parentElement;
+      const newRow = document.createElement("div");
+      newRow.classList.add("input-row");
+      newRow.innerHTML = `<input type="text" class="${type}" /> <button onclick="addInput(this, '${type}')">➕</button>`;
+      container.appendChild(newRow);
+      // 新增輸入框後觸發一次更新，以便儲存到 Sheets (但實際儲存是透過 updateSummary 中的延遲)
+      updateSummaryWithDelay(); 
+    }
+
+    // 更新統計結果並同步到 Google Sheets
+    let updateTimeout; // 用於延遲發送請求
+    function updateSummary() {
+      const allFoodInputs = document.querySelectorAll(".food");
+      const allDrinkInputs = document.querySelectorAll(".drink");
+
+      const foodMap = {};
+      const drinkMap = {};
+      const personOrders = {}; // 用來儲存每個人的點餐細節
+
+      document.querySelectorAll('.person-block').forEach(personBlock => {
+        const name = personBlock.dataset.name;
+        const currentOrderId = personBlock.dataset.orderId; // 取得目前的 orderId
+        personOrders[name] = { foods: [], drinks: [], id: currentOrderId };
+        
+        personBlock.querySelectorAll('.food').forEach(input => {
+          const val = input.value.trim();
+          if (val) {
+            foodMap[val] = (foodMap[val] || 0) + 1;
+            personOrders[name].foods.push(val);
+          }
+        });
+
+        personBlock.querySelectorAll('.drink').forEach(input => {
+          const val = input.value.trim();
+          if (val) {
+            drinkMap[val] = (drinkMap[val] || 0) + 1;
+            personOrders[name].drinks.push(val);
+          }
+        });
+
+        // 將每個人的點餐資料發送到 Apps Script
+        // 注意：這裡將多個食物/飲料用逗號分隔成一個字串發送
+        sendOrderToServer(
+            name, 
+            personOrders[name].foods.join(', '), 
+            personOrders[name].drinks.join(', '), 
+            personOrders[name].id
+        );
+      });
+
+      // 顯示總計
+      document.getElementById("summary-foods").innerHTML =
+        "<strong>🍱 食物：</strong><br>" +
+        Object.entries(foodMap).map(([k, v]) => `${k} x${v}`).join("<br>");
+
+      document.getElementById("summary-drinks").innerHTML =
+        "<strong>🧋 飲料：</strong><br>" +
+        Object.entries(drinkMap).map(([k, v]) => `${k} x${v}`).join("<br>");
+      
+      // 顯示每個人的點餐內容
+      let detailedOrdersHTML = '<h2>每人點餐明細</h2>';
+      for (const name in personOrders) {
+        detailedOrdersHTML += `<p><strong>${name}：</strong>`;
+        if (personOrders[name].foods.length > 0) {
+            detailedOrdersHTML += ` 食物: ${personOrders[name].foods.join(', ')}`;
+        }
+        if (personOrders[name].drinks.length > 0) {
+            detailedOrdersHTML += ` 飲料: ${personOrders[name].drinks.join(', ')}`;
+        }
+        detailedOrdersHTML += '</p>';
+      }
+      document.getElementById('detailed-orders').innerHTML = detailedOrdersHTML;
+    }
+
+    // 延遲更新，避免頻繁發送請求到 Apps Script
+    function updateSummaryWithDelay() {
+        clearTimeout(updateTimeout);
+        updateTimeout = setTimeout(updateSummary, 1000); // 1 秒後才執行更新和發送請求
+    }
+
+
+    // 載入資料並顯示在頁面上
+    async function loadOrdersAndDisplay() {
+      const orders = await fetchOrdersFromServer();
+      const personBlocks = document.querySelectorAll('.person-block');
+      
+      // 先清空所有現有輸入框
+      personBlocks.forEach(personBlock => {
+        personBlock.querySelector('.food-inputs').innerHTML = '';
+        personBlock.querySelector('.drink-inputs').innerHTML = '';
+        personBlock.dataset.orderId = ''; // 清空 ID
+      });
+
+      // 填充從 Sheets 讀取到的資料
+      orders.forEach(order => {
+        const name = order.姓名;
+        const foodStr = order.食物 || '';
+        const drinkStr = order.飲料 || '';
+        const orderId = order.ID;
+
+        const personBlock = document.querySelector(`.person-block[data-name="${name}"]`);
+        if (personBlock) {
+          personBlock.dataset.orderId = orderId; // 設置 orderId
+
+          // 填充食物
+          const foodInputsContainer = personBlock.querySelector('.food-inputs');
+          const foods = foodStr.split(',').map(s => s.trim()).filter(s => s);
+          if (foods.length > 0) {
+            foods.forEach(food => {
+              const newRow = document.createElement("div");
+              newRow.classList.add("input-row");
+              newRow.innerHTML = `<input type="text" class="food" value="${food}" /> <button onclick="addInput(this, 'food')">➕</button>`;
+              foodInputsContainer.appendChild(newRow);
+            });
+          } else { // 如果沒有食物，給一個空白輸入框
+            const newRow = document.createElement("div");
+            newRow.classList.add("input-row");
+            newRow.innerHTML = '<input type="text" class="food" /> <button onclick="addInput(this, \'food\')">➕</button>';
+            foodInputsContainer.appendChild(newRow);
+          }
+
+          // 填充飲料
+          const drinkInputsContainer = personBlock.querySelector('.drink-inputs');
+          const drinks = drinkStr.split(',').map(s => s.trim()).filter(s => s);
+          if (drinks.length > 0) {
+            drinks.forEach(drink => {
+              const newRow = document.createElement("div");
+              newRow.classList.add("input-row");
+              newRow.innerHTML = `<input type="text" class="drink" value="${drink}" /> <button onclick="addInput(this, 'drink')">➕</button>`;
+              drinkInputsContainer.appendChild(newRow);
+            });
+          } else { // 如果沒有飲料，給一個空白輸入框
+            const newRow = document.createElement("div");
+            newRow.classList.add("input-row");
+            newRow.innerHTML = '<input type="text" class="drink" /> <button onclick="addInput(this, \'drink\')">➕</button>';
+            drinkInputsContainer.appendChild(newRow);
+          }
+        }
+      });
+
+      // 對於沒有在 Sheets 中找到紀錄的人員，確保他們也有空白輸入框
+      personBlocks.forEach(personBlock => {
+        const name = personBlock.dataset.name;
+        // 檢查是否已從 Sheets 載入過此人資料，如果沒有，確保有空白輸入框
+        if (!personBlock.dataset.orderId) { 
+            ['food', 'drink'].forEach(type => {
+                const inputsContainer = personBlock.querySelector(`.${type}-inputs`);
+                if (inputsContainer.children.length === 0) { // 如果沒有任何輸入框
+                    const newRow = document.createElement("div");
+                    newRow.classList.add("input-row");
+                    newRow.innerHTML = `<input type="text" class="${type}" /> <button onclick="addInput(this, '${type}')">➕</button>`;
+                    inputsContainer.appendChild(newRow);
+                }
+            });
+        }
+      });
+      
+      updateSummary(); // 載入並填充完資料後，再執行一次統計，確保顯示正確
+    }
+
+    // 監聽所有輸入框的變化，並延遲更新統計
+    document.addEventListener("input", updateSummaryWithDelay);
+
+    // 網頁載入時執行
+    document.addEventListener("DOMContentLoaded", () => {
+        loadOrdersAndDisplay(); // 載入儲存的資料
+        // 每 10 秒自動重新載入一次資料，實現「即時」顯示他人的輸入
+        setInterval(loadOrdersAndDisplay, 10000); 
+    });
+  </script>
+</body>
+</html>
